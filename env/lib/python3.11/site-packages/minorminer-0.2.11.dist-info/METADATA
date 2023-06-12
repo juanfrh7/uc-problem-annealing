@@ -1,0 +1,27 @@
+Metadata-Version: 2.1
+Name: minorminer
+Version: 0.2.11
+Summary: heuristic algorithm to find graph minor embeddings
+Home-page: https://github.com/dwavesystems/minorminer
+Author: Kelly Boothby
+Author-email: boothby@dwavesys.com
+License: Apache 2.0
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Requires-Python: >=3.7
+License-File: LICENSE
+Requires-Dist: scipy
+Requires-Dist: networkx
+Requires-Dist: dwave-networkx (>=0.8.10)
+Requires-Dist: numpy
+Requires-Dist: fasteners
+Requires-Dist: homebase
+Requires-Dist: rectangle-packer (>=2.0.1)
+
+minorminer is a tool for finding graph minors, developed to embed Ising problems onto quantum annealers (QA). Where it can be used to find minors in arbitrary graphs, it is particularly geared towards the state of the art in QA: problem graphs of a few to a few hundred variables, and hardware graphs of a few thousand qubits.
