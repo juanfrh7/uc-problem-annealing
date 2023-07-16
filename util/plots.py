@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import seaborn as sns
+import pandas as pd
 
 def plot_schedule(schedule, n_hours, n_generators, save_image=False, image_path=None) -> None:
     """
@@ -51,3 +52,43 @@ def plot_schedule(schedule, n_hours, n_generators, save_image=False, image_path=
         plt.savefig(image_path)
     else:
         plt.show()
+
+def plot_error(dictionary):
+    # Convert the dictionary to a DataFrame
+    df = pd.DataFrame.from_dict(dictionary, orient='index', columns=['Relative error'])
+    df.reset_index(inplace=True)
+    df.rename(columns={'index': 'Problem Size'}, inplace=True)
+
+    # Plot the data
+    plt.figure(figsize=(8, 6))
+    plt.grid()
+    sns.lineplot(x='Problem Size', y='Relative error', data=df, marker='o')
+    plt.xlabel('Problem Size')
+    plt.ylabel('Relative Error')
+    plt.title('Relative Error by Problem Size')
+    plt.show()
+
+def plot_comparison(qpu, cpu):
+    # Convert the dictionaries to DataFrames
+    df1 = pd.DataFrame.from_dict(qpu, orient='index', columns=['Time'])
+    df1.reset_index(inplace=True)
+    df1.rename(columns={'index': 'Problem Size'}, inplace=True)
+    df1['Method'] = 'Leap Hybrid CQM Solver'
+
+    df2 = pd.DataFrame.from_dict(cpu, orient='index', columns=['Time'])
+    df2.reset_index(inplace=True)
+    df2.rename(columns={'index': 'Problem Size'}, inplace=True)
+    df2['Method'] = 'CBC MILP Solver'
+
+    # Concatenate the DataFrames
+    df = pd.concat([df1, df2])
+
+    # Plot the data
+    plt.figure(figsize=(8, 6))
+    plt.grid()
+    sns.lineplot(x='Problem Size', y='Time', hue='Method', style='Method', data=df)
+    plt.xlabel('Problem Size')
+    plt.ylabel('Time [s]')
+    plt.title('Comparison of Times by Problem Size')
+    plt.legend(title='Method')
+    plt.show()
