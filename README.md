@@ -18,7 +18,7 @@ This repository contains the following main files:
 
 1. [`simple_implementation.ipynb`](https://github.com/juanfrh7/uc-problem-annealing/blob/main/tests/simple_implementation.ipynb): This file presents a mathematical formulation and simple implementation of solving the UC problem using D-Wave's quantum annealer. It provides an example of how to formulate the UC problem as a constrained quadratic model and interface with the D-Wave QPU to find an approximate solution.
 
-2. [`benchmarking.ipynb`](https://github.com/juanfrh7/uc-problem-annealing/blob/main/tests/benchmarking.ipynb): classical optimization techniques are employed to address the UC problem, with the goal of benchmarking quantum annealing against Mixed-Integer Linear Programming (MILP). The notebook undertakes several key analyses:
+2. [`benchmarking.ipynb`](https://github.com/juanfrh7/uc-problem-annealing/blob/main/tests/benchmarking.ipynb): classical optimization techniques are employed to address the UC problem, with the goal of benchmarking quantum annealing against classical algorithms. The notebook undertakes several key analyses:
     - comparing and visualizing cost function outcomes to evaluate quantum's enhancements over classical,
     - calculating relative errors to quantify quantum accuracy,
     - assessing scalability through problem size incrementation,
