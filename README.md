@@ -39,7 +39,7 @@ The real-world datasets used in this project were obtained from the [power-syste
 
 - [Energy Demand Data](https://github.com/juanfrh7/uc-problem-annealing/blob/main/data/Demand.csv): hourly demand estimations for the year 2020, presented as net load at the transmission substation level after accounting for 600MW of behind-the-meter solar power.
 
-- [Fuel Cost Data'](https://github.com/juanfrh7/uc-problem-annealing/blob/main/data/Fuels_data.csv): includes estimated natural gas fuel costs.
+- [Fuel Cost Data](https://github.com/juanfrh7/uc-problem-annealing/blob/main/data/Fuels_data.csv): includes estimated natural gas fuel costs.
 
 - [Generator Variability Data](https://github.com/juanfrh7/uc-problem-annealing/blob/main/data/Generators_variability.csv): comprises variable generation capacity factors for PV, hydroelectric, and wind turbines.
 
@@ -48,3 +48,9 @@ The real-world datasets used in this project were obtained from the [power-syste
 Contributions to this repository are welcome! If you have ideas for improvements, additional benchmarks, or further optimizations, feel free to submit a pull request.
 
 ## References
+
+[1] A. Bhardwaj, Vikram Kumar Kamboj, Vijay Kumar Shukla, B. Singh and P. Khurana, [Unit commitment in electrical power system-a literature review](https://ieeexplore.ieee.org/abstract/document/6230874), 2012 IEEE International Power Engineering and Optimization Conference Melaka, Malaysia, Melaka, Malaysia, 2012, pp. 275-280, doi: 10.1109/PEOCO.2012.6230874.
+
+[2] L. Andrew, [Ising formulations of many NP problems](https://www.frontiersin.org/articles/10.3389/fphy.2014.00005), Frontiers in Physics, 2, 2014, doi: 10.3389/fphy.2014.00005  
+
+[3] S. Golestan, M.R. Habibi, S.Y. Mousazadeh Mousavi, J.M. Guerrero, J.C. Vasquez, [Quantum computation in power systems: An overview of recent advances](https://www.sciencedirect.com/science/article/pii/S2352484722025720), Energy Reports, Volume 9, 2023, doi: https://doi.org/10.1016/j.egyr.2022.11.185.  
