@@ -55,6 +55,3 @@ Contributions to this repository are welcome! If you have ideas for improvements
 [2] L. Andrew, [Ising formulations of many NP problems](https://www.frontiersin.org/articles/10.3389/fphy.2014.00005), Frontiers in Physics, 2, 2014, doi: 10.3389/fphy.2014.00005  
 
 [3] S. Golestan, M.R. Habibi, S.Y. Mousazadeh Mousavi, J.M. Guerrero, J.C. Vasquez, [Quantum computation in power systems: An overview of recent advances](https://www.sciencedirect.com/science/article/pii/S2352484722025720), Energy Reports, Volume 9, 2023, doi: https://doi.org/10.1016/j.egyr.2022.11.185.  
-
-
-This research project was funded by the University of Sydney Business School.
