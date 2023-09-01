@@ -15,101 +15,163 @@
 
 import dwave
 import dimod
-import neal
-import os
 import pandas as pd
-from dwave.system import DWaveSampler, EmbeddingComposite, LeapHybridCQMSampler
+from dwave.system import LeapHybridCQMSampler
 from dimod import QuadraticModel, ConstrainedQuadraticModel, Binary, Integer
-from neal import SimulatedAnnealingSampler
 import numpy as np
 
 from pulp import *
 import timeit
 
-from pathlib import Path
-import sys
-#path_root = Path(/Users/juanfrancisco/Desktop/uc/uc-problem-annealing/uc_annealing.py).parents[2]
-sys.path.append('/Users/juanfrancisco/Desktop/uc/uc-problem-annealing')
-sys.path.append('/Users/juanfrancisco/Desktop/uc/uc-problem-annealing/util')
-
 class UC_Annealing:
 
-    def __init__(self, demand, fuel_data, generators) -> None:
+    def __init__(self, num_periods: int, generators: pd.DataFrame, demand: pd.DataFrame, variability: pd.DataFrame, start_shut: bool = False):
 
-        self.demand = demand
-        self.fuel_data = fuel_data
+        # Save data
+        self.demand = demand['Demand'][:num_periods].values
         self.generators = generators
+        self.variability = variability
 
+        # Parameters
         self.num_generators = len(generators)
-        self.periods = len(demand)
-
+        self.periods = num_periods
         self.size = self.num_generators * self.periods
+        self.start_shut = start_shut
 
-        self.cqm = None
-        self.x = None
-        self.y = None
-
-    def get_objective(self):
-        return self.cqm.objective
-
-    def get_energy_constraints(self) -> str:
-        return self.cqm.constraints['energy_demand'].to_polystring()
+        # Variables
+        self.gen = None
+        self.commit = None
+        if self.start_shut:
+            self.start = None
+            self.shut = None
     
-    def define_cqm(self) -> None:
-        self.cqm = ConstrainedQuadraticModel()
+    def classify_dataset(self) -> [pd.DataFrame]:
 
-    def define_variable(self) -> None:
-        #define the commitment variable
-        self.x = {(n, t): Binary('x_{}_{}'.format(n, t)) for n, rows in self.generators.iterrows() for t in range(self.periods)}
+        # Classify generators into different types
+        thermal_generators = self.generators[self.generators['Up_time']>0]
+        non_thermal_generators = self.generators[self.generators['Up_time']==0]
+        non_var_generators = self.generators[self.generators['IsVariable'] == False]
+        var_generators = self.generators[self.generators['IsVariable'] == True]
+        non_thermal_non_var_generators = non_thermal_generators.merge(non_var_generators, on='Resource')
 
-        #define the generation variable 
-        self.y = {(n, t): Integer('y_{}_{}'.format(n, t)) for n, rows in self.generators.iterrows() for t in range(self.periods)}
+        return thermal_generators, non_thermal_generators, non_var_generators, var_generators, non_thermal_non_var_generators
 
-    def define_objective(self) ->  None:
-        objective = QuadraticModel()
-        for generator, row in self.generators.iterrows():
+    def define_variables(self, thermal_generators) -> None:
+        # commitment variable
+        self.commit = {(n, t): Binary('commit_{}_{}'.format(n, t)) for n, rows in thermal_generators.iterrows() for t in range(self.periods)}
+
+        # generation variable 
+        self.gen = {(n, t): Integer('gen_{}_{}'.format(n, t)) for n, rows in self.generators.iterrows() for t in range(self.periods)}
+
+        if self.start_shut == True:
+
+            # start up variable 
+            self.start = {(n, t): Binary('start_{}_{}'.format(n, t)) for n, rows in thermal_generators.iterrows() for t in range(self.periods)}
+
+            # shut down variable 
+            self.shut = {(n, t): Binary('shut_{}_{}'.format(n, t)) for n, rows in thermal_generators.iterrows() for t in range(self.periods)}
+
+    def define_objective(self, model, non_var_generators, var_generators, thermal_generators) ->  None:
+        operating_cost = QuadraticModel()
+
+        # cost for non_varying generators
+        for generator, row in non_var_generators.iterrows():
             for hour in range(self.periods):
-                heat_rate = self.generators['Heat_rate_MMBTU_per_MWh'][generator]
-                fuel = self.generators['Fuel'][generator]
-                fuel_cost = self.fuel_data[self.fuel_data['Fuel'] == fuel]['Cost_per_MMBtu'].values[0]
-                VarOM = self.generators['Var_OM_cost_per_MWh'][generator]
+                heat_rate = row['Heat_rate_MMBTU_per_MWh']
+                fuel_cost = row['Cost_per_MMBtu']
+                VarOM = row['Var_OM_cost_per_MWh']
+                operating_cost.update((heat_rate * fuel_cost + VarOM) * self.gen[generator, hour])
 
-                objective.update((heat_rate * fuel_cost + VarOM) * self.y[generator, hour])
-                
-        self.cqm.set_objective(objective)
+        # cost for varying generators
+        for generator, row in var_generators.iterrows():
+            for hour in range(self.periods):
+                VarOM = row['Var_OM_cost_per_MWh']
+                operating_cost.update(VarOM * self.gen[generator, hour])
 
-    def define_energy_constraint(self) ->  None:
+        if self.start_shut == True:
+
+            # startup cost for thermal generators
+            for generator, row in thermal_generators.iterrows():
+                for hour in range(self.periods):
+                    existing_cap = row['Existing_Cap_MW']
+                    start_cost = row['Start_cost_per_MW']
+                    operating_cost.update(existing_cap * start_cost * self.start[generator, hour])
+
+        model.set_objective(operating_cost)
+
+    def define_energy_constraints(self, model) ->  None:
+        # Supply must = demand in all time periods
         for hour in range(self.periods):
             sum_energies = QuadraticModel()
             for generator, row in self.generators.iterrows():
-                sum_energies += self.y[generator, hour]
+                sum_energies += self.gen[generator, hour]
+            model.add_constraint(sum_energies == self.demand[hour], label = f'energy demand hour {hour}')
 
-            self.cqm.add_constraint(sum_energies == self.demand[hour], label = f'energy demand hour {hour}')
-
-    def define_energy_bounds(self) ->  None:
+    def define_capacity_constraints(self, model, thermal_generators, non_thermal_non_var_generators, var_generators) ->  None:
+        # energy bounds for thermal generators
         for hour in range(self.periods):
-            for generator, row in self.generators.iterrows():
+            for generator, row in thermal_generators.iterrows():
                 existing_cap = row['Existing_Cap_MW']
                 min_power = row['Min_power']
-
                 
-                self.cqm.add_constraint(self.x[generator, hour] * existing_cap * min_power - self.y[generator, hour] <= 0,
-                                label = f'energy lower bound generator {generator} at {hour}')
+                model.add_constraint(self.gen[generator, hour] - self.commit[generator, hour] * existing_cap * min_power  >= 0,
+                                label = f'energy lower bound thermal generator {generator} at {hour}')
                 
-                self.cqm.add_constraint(self.x[generator, hour] * existing_cap - self.y[generator, hour] >= 0,
-                                label = f'energy upper bound generator {generator} at {hour}')
+                model.add_constraint(self.gen[generator, hour] - self.commit[generator, hour] * existing_cap <= 0,
+                                label = f'energy upper bound thermal generator {generator} at {hour}')
+                
+        # energy bounds for non-variable generation not requiring commitment
+        for hour in range(self.periods):
+            for generator, row in non_thermal_non_var_generators.iterrows():
+                existing_cap = row['Existing_Cap_MW_x']
 
+                model.add_constraint(self.gen[generator, hour] - existing_cap <= 0,
+                label = f'energy lower bound non variable generator {generator} at {hour}')
+
+        # energy bounds for variable generation, accounting for hourly capacity factor
+        for hour in range(self.periods):
+            for generator, row in var_generators.iterrows():
+                existing_cap = row['Existing_Cap_MW']
+                name = str(row['region']) + '_' + str(row['Resource']) + '_1.0'
+                variability = self.variability.loc[(self.variability['generator'] == name) & 
+                (self.variability['Hour'] == hour +1), 'Variability'].values[0]
+
+                model.add_constraint(self.gen[generator, hour] - existing_cap * variability <= 0,
+                label = f'energy lower bound variable generator {generator} at {hour}')
+
+    def unit_commitment_constraints(self, model, thermal_generators) -> None:
+        # minimum up and down time
+        for generator, row in thermal_generators.iterrows():
+            for hour in range(self.periods):
+                
+                if hour >= row['Up_time']:
+                    model.add_constraint(self.commit[generator, hour] - sum(self.start[generator, t] for t in range(hour - row['Up_time'], hour)) >= 0,
+                                    label = f'start time of generator {generator} at {hour}')
+                if hour >= row['Down_time']:
+                    model.add_constraint(1 - self.commit[generator, hour] - sum(self.shut[generator, t] for t in range(hour - row['Down_time'], hour)) >= 0,
+                                    label = f'shut time of generator {generator} at {hour}')
+                    
+        # Commmitment state
+        for hour in range(1, self.periods):
+            for generator, row in thermal_generators.iterrows():
+                model.add_constraint(self.commit[generator, hour]  - self.commit[generator, hour - 1] - self.start[generator, hour] + self.shut[generator, hour] == 0,
+                                label = f'commitment state generator {generator} at {hour}')
+    
     def sample_problem(self) -> dict:
 
-        self.define_cqm()
-        self.define_variable()
+        model = ConstrainedQuadraticModel()
+        thermal, non_thermal, non_var, var, non_thermal_non_var = self.classify_dataset()
 
-        self.define_objective()
-        self.define_energy_constraint()
-        self.define_energy_bounds()
+        self.define_variables(thermal)
+        self.define_objective(model, non_var, var, thermal)
+        self.define_energy_constraints(model)
+        self.define_capacity_constraints(model, thermal, non_thermal_non_var, var)
+
+        if self.start_shut:
+            self.unit_commitment_constraints(model, thermal)
 
         sampler = LeapHybridCQMSampler()
-        raw_sampleset = sampler.sample_cqm(self.cqm)
+        raw_sampleset = sampler.sample_cqm(model)
         feasible_sampleset = raw_sampleset.filter(lambda d: d.is_feasible)
         num_feasible = len(feasible_sampleset)
 
@@ -123,32 +185,95 @@ class UC_Annealing:
         return best_samples
     
     def classical_implementation(self):
+
+        thermal, non_thermal, non_var, var, non_thermal_non_var = self.classify_dataset()
+        
         # Create a MILP problem
-        prob = LpProblem("Unit_Commitment_Problem", LpMinimize)
+        prob = LpProblem("Unit_self.commitment_Problem", LpMinimize)
 
         # Decision variables
-        x = LpVariable.dicts("x", [(generator, t) for generator, rows in self.generators.iterrows() for t in range(self.periods)], cat="Binary")
-        y = LpVariable.dicts("y", [(generator, t) for generator, rows in self.generators.iterrows() for t in range(self.periods)], cat="Integer")
-        
-        
-        prob += lpSum([(row['Heat_rate_MMBTU_per_MWh'] * 
-                self.fuel_data[self.fuel_data['Fuel'] == self.generators['Fuel'][generator]]['Cost_per_MMBtu'].values[0]
-                + row['Var_OM_cost_per_MWh']) * y[generator, t]
-                for generator, row in self.generators.iterrows() for t in range(self.periods)])
-        
-        #define the energy demand contraint
-        for hour in range(self.periods):
-            prob += lpSum([y[generator, hour] for generator, row in self.generators.iterrows()]) == self.demand[hour]
+        commit = LpVariable.dicts("commit", [(generator, t) for generator, rows in thermal.iterrows() for t in range(self.periods)], cat="Binary")
+        gen = LpVariable.dicts("gen", [(generator, t) for generator, rows in self.generators.iterrows() for t in range(self.periods)], cat="Integer")
 
-        #define the energy demand contraint
+        if self.start_shut:
+            start = LpVariable.dicts("start", [(generator, t) for generator, rows in thermal.iterrows() for t in range(self.periods)], cat="Binary")
+            shut = LpVariable.dicts("shut", [(generator, t) for generator, rows in thermal.iterrows() for t in range(self.periods)], cat="Binary")
+        
+        # Initialize lists to store linear expressions for each term
+        non_varying_terms = []
+        varying_terms = []
+        thermal_terms = []
+
+        # non-varying generators
+        for generator, row in non_var.iterrows():
+            for hour in range(self.periods):
+                heat_rate = row['Heat_rate_MMBTU_per_MWh']
+                fuel_cost = row['Cost_per_MMBtu']
+                VarOM = row['Var_OM_cost_per_MWh']
+                non_varying_terms.append((heat_rate * fuel_cost + VarOM) * gen[generator, hour])
+
+        # varying generators
+        for generator, row in var.iterrows():
+            for hour in range(self.periods):
+                VarOM = row['Var_OM_cost_per_MWh']
+                varying_terms.append(VarOM * gen[generator, hour])
+
+        if self.start_shut:
+            # thermal generators
+            for generator, row in thermal.iterrows():
+                for hour in range(self.periods):
+                    existing_cap = row['Existing_Cap_MW']
+                    start_cost = row['Start_cost_per_MW']
+                    thermal_terms.append(existing_cap * start_cost * start[generator, hour])
+
+        # Add all terms using lpSum
+        total_obj = lpSum(non_varying_terms) + lpSum(varying_terms) + lpSum(thermal_terms)
+        prob += total_obj
+
+        # Define the energy demand constraint
         for hour in range(self.periods):
-            for generator, row in self.generators.iterrows():
+            sum_energies = lpSum(gen[generator, hour] for generator, _ in self.generators.iterrows())
+            prob += (sum_energies == self.demand[hour])
+
+        # thermal generators requiring commitment
+        for hour in range(self.periods):
+            for generator, row in thermal.iterrows():
                 existing_cap = row['Existing_Cap_MW']
                 min_power = row['Min_power']
 
-                prob += lpSum([x[generator, hour] * existing_cap * min_power - y[generator, hour]]) <= 0
-                prob += lpSum([x[generator, hour] * existing_cap - y[generator, hour]]) >= 0
-                
+                prob += lpSum([gen[generator, hour] - commit[generator, hour] * existing_cap * min_power]) >= 0
+                prob += lpSum([gen[generator, hour] - commit[generator, hour] * existing_cap]) <= 0
+
+        # non-variable generation not requiring commitment
+        for hour in range(self.periods):
+            for generator, row in non_thermal_non_var.iterrows():
+                existing_cap = row['Existing_Cap_MW_x']
+                prob += lpSum([gen[generator, hour] - existing_cap]) <= 0
+
+        # variable generation, accounting for hourly capacity factor
+        for hour in range(self.periods):
+            for generator, row in var.iterrows():
+                existing_cap = row['Existing_Cap_MW']
+                name = str(row['region']) + '_' + str(row['Resource']) + '_1.0'
+                variability = self.variability.loc[(self.variability['generator'] == name) & (self.variability['Hour'] == hour +1), 'Variability'].values[0]
+
+                prob += lpSum([gen[generator, hour] - existing_cap * variability]) <= 0
+
+        if self.start_shut:
+            # minimum up and down time
+            for generator, row in thermal.iterrows():
+                for hour in range(self.periods):
+                    if hour >= row['Up_time']:
+                        prob += lpSum(commit[generator, hour] - sum(start[generator, t] for t in range(hour - row['Up_time'], hour))) >= 0
+
+                    if hour >= row['Down_time']:
+                        prob += lpSum(1 - commit[generator, hour] - sum(shut[generator, t] for t in range(hour - row['Down_time'], hour))) <= 0
+
+            # Commmitment state
+            for hour in range(1, self.periods):
+                for generator, row in thermal.iterrows():
+                    prob += lpSum(commit[generator, hour]  - commit[generator, hour - 1] - start[generator, hour] + shut[generator, hour]) == 0
+           
         # Solve the problem
         def solve_problem():
             prob.solve()
@@ -159,14 +284,16 @@ class UC_Annealing:
         # Check the solution status
         if LpStatus[prob.status] == 'Optimal':
             # Retrieve the optimal solution
-                # Retrieve the optimal solution
-            x_result = {(generator, t): value(x[generator, t]) for generator, row in self.generators.iterrows() for t in range(self.periods)}
-            y_result = {(generator, t): value(y[generator, t]) for generator, row in self.generators.iterrows() for t in range(self.periods)}
-            total_cost = value(prob.objective)
+            commit_solution = {(generator, t): commit[generator, t].varValue for generator, row in thermal.iterrows() for t in range(self.periods)}
+            gen_solution = {(generator, t): gen[generator, t].varValue for generator, row in self.generators.iterrows() for t in range(self.periods)}
+            solution = [commit_solution, gen_solution]
+            if self.start_shut:
+                start_solution = {(generator, t): start[generator, t].varValue for generator, row in thermal.iterrows() for t in range(self.periods)}
+                shut_solution = {(generator, t): shut[generator, t].varValue for generator, row in thermal.iterrows() for t in range(self.periods)}
+                solution += [start_solution] + [shut_solution]
+            
+            total_cost = prob.objective.value()
 
-            solution = [x_result, y_result]
-
-            total_cost = value(prob.objective)
             return solution, total_cost, execution_time
         else:
             print("No feasible solution found.")
@@ -179,61 +306,86 @@ class UC_Annealing:
         ## 1. Unpack quantum results
 
         best_sample = quantum_sample.first.sample
-        # Separate x and y variables into two dictionaries
-        x_results_quantum = {}
-        y_results_quantum = {}
+        
+        ## 2. Separate variables into dictionaries
+        commit_results = {}
+        gen_results = {}
+        start_results = {}
+        shut_results = {}
 
         for key, value in best_sample.items():
-            if key.startswith('x'):
-                x_results_quantum[key] = value
-            elif key.startswith('y'):
-                y_results_quantum[key] = value
+            if key.startswith('commit'):
+                commit_results[key] = value
+            elif key.startswith('gen'):
+                gen_results[key] = value
+
+            if self.start_shut:
+                if key.startswith('start'):
+                    start_results[key] = value
+                elif key.startswith('shut'):
+                    shut_results[key] = value
 
         # Prepare the data
-        generators = []
-        times = []
+        gens = []
+        periods = []
+        energies = []
         resource = []
-        energy_annealer = []
-        status_annealer = []
-        quantum_cost = quantum_sample.first.energy
+        cost = quantum_sample.first.energy
 
-        for key, value in y_results_quantum.items():
+        for key, value in gen_results.items():
             key_parts = key.split('_')
-            _, generator, time = key_parts
-            generators.append(int(generator))
-            times.append(int(time))
-            energy_annealer.append(value)
+            _, generator, period = key_parts
+            gens.append(int(generator))
+            periods.append(int(period))
+            energies.append(value)
             resource.append(self.generators['Resource'][int(generator)])
 
-        for key, value in x_results_quantum.items():
-            status_annealer.append(value)
-
-        ## 2. Create dataframe
-
         # Create a DataFrame
-        results = pd.DataFrame({
-            'Generator': generators,
-            'Resource' : resource,
-            'Time': times,
-            'Size': self.size,
-            'Variables': len(quantum_sample.variables),
-            'Generated Energy annealer': energy_annealer,
-            'Status annealer': status_annealer,
-            'Cost annealer': quantum_cost,
-            'QPU access time [s]': quantum_sample.info['qpu_access_time']/1000000,
-            'QPU charge time [s]': quantum_sample.info['charge_time']/1000000,
-            'QPU run time [s]': quantum_sample.info['run_time']/1000000
-
+        data_df = pd.DataFrame({
+            'Generators': gens,
+            'Resources' : resource,
+            'Periods': periods,
+            'Problem size': self.size,
+            'Number of variables': len(quantum_sample.variables),
+            'Generated energy annealer': energies,
+            'Commitment annealer': None,
+            'Start-up annealer': None,
+            'Shut-down annealer': None,
+            'Operational cost annealer': cost,
+            'QPU access time': quantum_sample.info['qpu_access_time']/1000000,
+            'QPU charge time': quantum_sample.info['charge_time'],
+            'QPU run time': quantum_sample.info['run_time']
         })
 
+        for key, value in commit_results.items():
+            key_parts = key.split('_')
+            _, generator, time = key_parts
+            row_index = data_df[(data_df['Generators'] == int(generator)) & (data_df['Periods'] == int(time))].index[0]
+            data_df.loc[row_index, 'Commitment annealer'] = value
+
+        for key, value in start_results.items():
+            key_parts = key.split('_')
+            _, generator, time = key_parts
+            row_index = data_df[(data_df['Generators'] == int(generator)) & (data_df['Periods'] == int(time))].index[0]
+            data_df.loc[row_index, 'Start-up annealer'] = value
+
+        for key, value in shut_results.items():
+            key_parts = key.split('_')
+            _, generator, time = key_parts
+            row_index = data_df[(data_df['Generators'] == int(generator)) & (data_df['Periods'] == int(time))].index[0]
+            data_df.loc[row_index, 'Shut-down annealer'] = value
+
+
         ## 3. Unpack classical results
+        data_df['Generated energy classical'] = [classical_solution[1].get((row['Generators'], row['Periods']), None) for index, row in data_df.iterrows()]
+        data_df['Commitment classical'] = [classical_solution[0].get((row['Generators'], row['Periods']), None) for index, row in data_df.iterrows()]
 
-        results['Generated Energy classical'] = [classical_solution[1].get((row['Generator'], row['Time']), 0.0) for index, row in results.iterrows()]
-        results['Generator status classical'] = [classical_solution[0].get((row['Generator'], row['Time']), 0.0) for index, row in results.iterrows()]
-        results['Classical cost'] = classical_cost
-        results['Classical execution time [s]'] = classical_time
+        if self.start_shut:
+            data_df['Start-up classical'] = [classical_solution[2].get((row['Generators'], row['Periods']), None) for index, row in data_df.iterrows()]
+            data_df['Shut classical'] = [classical_solution[3].get((row['Generators'], row['Periods']), None) for index, row in data_df.iterrows()]
+        data_df['Operational cost classical'] = classical_cost
+        data_df['CPU time'] = classical_time
 
-
-        return results
+        return data_df
 
 
