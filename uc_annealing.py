@@ -26,6 +26,18 @@ import timeit
 class UC_Annealing:
 
     def __init__(self, num_periods: int, generators: pd.DataFrame, demand: pd.DataFrame, variability: pd.DataFrame, start_shut: bool = False):
+        """
+        Initialize the Unit Commitment (UC) Annealing class.
+
+        Parameters:
+        - num_periods (int): The number of time periods.
+        - generators (pd.DataFrame): DataFrame containing generator data.
+        - demand (pd.DataFrame): DataFrame containing demand data.
+        - variability (pd.DataFrame): DataFrame containing generator variability data.
+        - start_shut (bool, optional): Flag indicating whether to consider startup/shutdown constraints. Default is False.
+
+        Initializes various attributes and variables needed for UC problem solving.
+        """
 
         # Save data
         self.demand = demand['Demand'][:num_periods].values
@@ -46,10 +58,21 @@ class UC_Annealing:
             self.shut = None
     
     def classify_dataset(self) -> [pd.DataFrame]:
+        """
+        Classify generators into different types based on their characteristics.
+
+        Returns:
+        List of DataFrames, each containing generators of a specific type.
+        - Thermal Generators
+        - Non-Thermal Generators
+        - Non-Variable Generators
+        - Variable Generators
+        - Non-Thermal Non-Variable Generators
+        """
 
         # Classify generators into different types
-        thermal_generators = self.generators[self.generators['Up_time']>0]
-        non_thermal_generators = self.generators[self.generators['Up_time']==0]
+        thermal_generators = self.generators[self.generators['Up_time'] > 0]
+        non_thermal_generators = self.generators[self.generators['Up_time'] == 0]
         non_var_generators = self.generators[self.generators['IsVariable'] == False]
         var_generators = self.generators[self.generators['IsVariable'] == True]
         non_thermal_non_var_generators = non_thermal_generators.merge(non_var_generators, on='Resource')
@@ -57,24 +80,49 @@ class UC_Annealing:
         return thermal_generators, non_thermal_generators, non_var_generators, var_generators, non_thermal_non_var_generators
 
     def define_variables(self, thermal_generators) -> None:
-        # commitment variable
+        """
+        Define optimization variables for the Unit Commitment problem.
+
+        Parameters:
+        - thermal_generators (pd.DataFrame): DataFrame containing thermal generator data.
+
+        Initializes variables:
+        - commitment variables
+        - generation variables
+        - startup variables (if start_shut is True)
+        - shutdown variables (if start_shut is True)
+        """
+
+        # Commitment variable
         self.commit = {(n, t): Binary('commit_{}_{}'.format(n, t)) for n, rows in thermal_generators.iterrows() for t in range(self.periods)}
 
-        # generation variable 
+        # Generation variable 
         self.gen = {(n, t): Integer('gen_{}_{}'.format(n, t)) for n, rows in self.generators.iterrows() for t in range(self.periods)}
 
         if self.start_shut == True:
-
-            # start up variable 
+            # Start-up variable 
             self.start = {(n, t): Binary('start_{}_{}'.format(n, t)) for n, rows in thermal_generators.iterrows() for t in range(self.periods)}
 
-            # shut down variable 
+            # Shut-down variable 
             self.shut = {(n, t): Binary('shut_{}_{}'.format(n, t)) for n, rows in thermal_generators.iterrows() for t in range(self.periods)}
 
+
     def define_objective(self, model, non_var_generators, var_generators, thermal_generators) ->  None:
+        """
+        Define the optimization objective function for the Unit Commitment problem.
+
+        Parameters:
+        - model: The optimization model being defined.
+        - non_var_generators (pd.DataFrame): DataFrame containing non-variable generator data.
+        - var_generators (pd.DataFrame): DataFrame containing variable generator data.
+        - thermal_generators (pd.DataFrame): DataFrame containing thermal generator data.
+
+        Initializes the operating cost objective function based on generator characteristics.
+        """
+
         operating_cost = QuadraticModel()
 
-        # cost for non_varying generators
+        # Cost for non-varying generators
         for generator, row in non_var_generators.iterrows():
             for hour in range(self.periods):
                 heat_rate = row['Heat_rate_MMBTU_per_MWh']
@@ -82,15 +130,14 @@ class UC_Annealing:
                 VarOM = row['Var_OM_cost_per_MWh']
                 operating_cost.update((heat_rate * fuel_cost + VarOM) * self.gen[generator, hour])
 
-        # cost for varying generators
+        # Cost for varying generators
         for generator, row in var_generators.iterrows():
             for hour in range(self.periods):
                 VarOM = row['Var_OM_cost_per_MWh']
                 operating_cost.update(VarOM * self.gen[generator, hour])
 
         if self.start_shut == True:
-
-            # startup cost for thermal generators
+            # Startup cost for thermal generators
             for generator, row in thermal_generators.iterrows():
                 for hour in range(self.periods):
                     existing_cap = row['Existing_Cap_MW']
@@ -100,35 +147,55 @@ class UC_Annealing:
         model.set_objective(operating_cost)
 
     def define_energy_constraints(self, model) ->  None:
-        # Supply must = demand in all time periods
+        """
+        Define energy constraints for the Unit Commitment problem.
+
+        Parameters:
+        - model: The optimization model being defined.
+
+        Ensures that the total energy supplied equals the demand in all time periods.
+        """
+
         for hour in range(self.periods):
             sum_energies = QuadraticModel()
             for generator, row in self.generators.iterrows():
                 sum_energies += self.gen[generator, hour]
-            model.add_constraint(sum_energies == self.demand[hour], label = f'energy demand hour {hour}')
+            model.add_constraint(sum_energies == self.demand[hour], label=f'energy demand hour {hour}')
 
     def define_capacity_constraints(self, model, thermal_generators, non_thermal_non_var_generators, var_generators) ->  None:
-        # energy bounds for thermal generators
+        """
+        Define capacity constraints for the Unit Commitment problem.
+
+        Parameters:
+        - model: The optimization model being defined.
+        - thermal_generators (pd.DataFrame): DataFrame containing thermal generator data.
+        - non_thermal_non_var_generators (pd.DataFrame): DataFrame containing non-thermal, non-variable generator data.
+        - var_generators (pd.DataFrame): DataFrame containing variable generator data.
+
+        Ensures that energy generation is within capacity bounds for each generator.
+        """
+
+        # Energy bounds for thermal generators
         for hour in range(self.periods):
             for generator, row in thermal_generators.iterrows():
                 existing_cap = row['Existing_Cap_MW']
                 min_power = row['Min_power']
                 
                 model.add_constraint(self.gen[generator, hour] - self.commit[generator, hour] * existing_cap * min_power  >= 0,
-                                label = f'energy lower bound thermal generator {generator} at {hour}')
+                                label=f'energy lower bound thermal generator {generator} at {hour}')
                 
                 model.add_constraint(self.gen[generator, hour] - self.commit[generator, hour] * existing_cap <= 0,
-                                label = f'energy upper bound thermal generator {generator} at {hour}')
+                                label=f'energy upper bound thermal generator {generator} at {hour}')
                 
-        # energy bounds for non-variable generation not requiring commitment
+        # Energy bounds for non-variable generation not requiring commitment
         for hour in range(self.periods):
             for generator, row in non_thermal_non_var_generators.iterrows():
                 existing_cap = row['Existing_Cap_MW_x']
 
                 model.add_constraint(self.gen[generator, hour] - existing_cap <= 0,
-                label = f'energy lower bound non variable generator {generator} at {hour}')
+                label=f'energy lower bound non-variable generator {generator} at {hour}')
 
-        # energy bounds for variable generation, accounting for hourly capacity factor
+        # Energy bounds for variable generation, accounting for hourly capacity factor
         for hour in range(self.periods):
             for generator, row in var_generators.iterrows():
                 existing_cap = row['Existing_Cap_MW']
@@ -137,9 +204,19 @@ class UC_Annealing:
                 (self.variability['Hour'] == hour +1), 'Variability'].values[0]
 
                 model.add_constraint(self.gen[generator, hour] - existing_cap * variability <= 0,
-                label = f'energy lower bound variable generator {generator} at {hour}')
+                label=f'energy lower bound variable generator {generator} at {hour}')
 
     def unit_commitment_constraints(self, model, thermal_generators) -> None:
+        """
+        Define unit commitment constraints for the Unit Commitment problem.
+
+        Parameters:
+        - model: The optimization model being defined.
+        - thermal_generators (pd.DataFrame): DataFrame containing thermal generator data.
+
+        Ensures minimum up and down times for thermal generators and commitment state consistency.
+        """
+
         # minimum up and down time
         for generator, row in thermal_generators.iterrows():
             for hour in range(self.periods):
@@ -158,6 +235,12 @@ class UC_Annealing:
                                 label = f'commitment state generator {generator} at {hour}')
     
     def sample_problem(self) -> dict:
+        """
+        Solve the Unit Commitment problem using Quantum Annealing.
+
+        Returns:
+        - dict: A dictionary containing the best quantum annealing solution.
+        """
 
         model = ConstrainedQuadraticModel()
         thermal, non_thermal, non_var, var, non_thermal_non_var = self.classify_dataset()
@@ -185,6 +268,12 @@ class UC_Annealing:
         return best_samples
     
     def classical_implementation(self):
+        """
+        Solve the Unit Commitment problem using a classical MILP solver.
+
+        Returns:
+        - Tuple: A tuple containing the classical solution, total cost, and execution time.
+        """
 
         thermal, non_thermal, non_var, var, non_thermal_non_var = self.classify_dataset()
         
@@ -299,6 +388,12 @@ class UC_Annealing:
             print("No feasible solution found.")
         
     def get_results(self) -> pd.DataFrame:
+        """
+        Get results from both quantum and classical implementations.
+
+        Returns:
+        - pd.DataFrame: A DataFrame containing the results of both implementations.
+        """
 
         quantum_sample = self.sample_problem()
         classical_solution, classical_cost, classical_time = self.classical_implementation()
