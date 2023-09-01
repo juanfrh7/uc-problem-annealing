@@ -1,6 +1,6 @@
 # Solving the Unit Commitment problem using DWave's Quantum Annealers
 
-This project was supported by The University of Sydney Business School Engaged Research iniitative. 
+This project was supported by The University of Sydney Business School Engaged Research initiative. 
 
 This repository contains implementations and benchmarks of the Unit Commitment (UC) problem using DWave's Quantum Annealers. The UC problem is an NP-hard optimization problem in the field of power systems. It involves determining the optimal scheduling of power generation units to meet electricity demand while considering factors such as start-up costs, ramping constraints, and more. 
 
