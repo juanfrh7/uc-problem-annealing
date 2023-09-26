@@ -322,10 +322,10 @@ class annealing_classical_method:
             'Problem size': self.size,
             'Generated energy variable annealer': energies,
             'Commitment variable annealer': None,
-            'Start-up variable annealer': None,
-            'Shut-down variable annealer': None,
+            'Start variable annealer': None,
+            'Shut variable annealer': None,
             'Operational cost annealer': cost,
-            'QPU access time': quantum_sample.info['qpu_access_time']/1000000,
+            'QPU access time': quantum_sample.info['qpu_access_time'],
             'QPU charge time': quantum_sample.info['charge_time'],
             'QPU run time': quantum_sample.info['run_time']
         })
@@ -334,19 +334,20 @@ class annealing_classical_method:
             key_parts = key.split('_')
             _, generator, time = key_parts
             row_index = data_df[(data_df['Generators'] == int(generator)) & (data_df['Periods'] == int(time))].index[0]
-            data_df.loc[row_index, 'Commitment annealer'] = value
+            data_df.loc[row_index, 'Commitment variable annealer'] = value
 
-        for key, value in start_results.items():
-            key_parts = key.split('_')
-            _, generator, time = key_parts
-            row_index = data_df[(data_df['Generators'] == int(generator)) & (data_df['Periods'] == int(time))].index[0]
-            data_df.loc[row_index, 'Start-up annealer'] = value
+        if self.start_shut:
+            for key, value in start_results.items():
+                key_parts = key.split('_')
+                _, generator, time = key_parts
+                row_index = data_df[(data_df['Generators'] == int(generator)) & (data_df['Periods'] == int(time))].index[0]
+                data_df.loc[row_index, 'Start variable annealer'] = value
 
-        for key, value in shut_results.items():
-            key_parts = key.split('_')
-            _, generator, time = key_parts
-            row_index = data_df[(data_df['Generators'] == int(generator)) & (data_df['Periods'] == int(time))].index[0]
-            data_df.loc[row_index, 'Shut-down annealer'] = value
+            for key, value in shut_results.items():
+                key_parts = key.split('_')
+                _, generator, time = key_parts
+                row_index = data_df[(data_df['Generators'] == int(generator)) & (data_df['Periods'] == int(time))].index[0]
+                data_df.loc[row_index, 'Shut variable annealer'] = value
 
         return data_df
 
