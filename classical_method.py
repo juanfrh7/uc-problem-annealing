@@ -404,19 +404,23 @@ class classical_implementation:
 
         solution, cost, time = self.classical_implementation()
 
+        gen_dic = solution[1]
+        commit_dic = solution[0]
+        if self.start_shut:
+            start_dic = solution[2]
+            shut_dic = solution[3]
+
          # Prepare the data
         gens = []
         periods = []
         energies = []
         resource = []
 
-        for key, value in gen_results.items():
-            key_parts = key.split('_')
-            _, generator, period = key_parts
-            gens.append(int(generator))
-            periods.append(int(period))
+        for key, value in gen_dic.items():
+            gens.append(int(key[0]))
+            periods.append(int(key[1]))
             energies.append(value)
-            resource.append(self.generators['Resource'][int(generator)])
+            resource.append(self.generators['Resource'][int(key[0])])
 
         # Create a DataFrame
         data_df = pd.DataFrame({
@@ -424,31 +428,26 @@ class classical_implementation:
             'Resources' : resource,
             'Periods': periods,
             'Problem size': self.size,
-            'Generated energy variable classical': solution[1],
-            'Commitment variable classical': solution[0],
-            'Start-up variable classical': solution[2],
-            'Shut-down variable classical': solution[3],
+            'Generated energy variable classical': energies,
+            'Commitment variable classical': None,
+            'Start variable classical': None,
+            'Shut variable classical': None,
             'Operational cost classical': cost,
             'CPU time': time
         })
 
-        for key, value in commit_results.items():
-            key_parts = key.split('_')
-            _, generator, time = key_parts
-            row_index = data_df[(data_df['Generators'] == int(generator)) & (data_df['Periods'] == int(time))].index[0]
-            data_df.loc[row_index, 'Commitment annealer'] = value
+        for key, value in commit_dic.items():
+            row_index = data_df[(data_df['Generators'] == int(key[0])) & (data_df['Periods'] == int(key[1]))].index[0]
+            data_df.loc[row_index, 'Commitment variable classical'] = value
 
-        for key, value in start_results.items():
-            key_parts = key.split('_')
-            _, generator, time = key_parts
-            row_index = data_df[(data_df['Generators'] == int(generator)) & (data_df['Periods'] == int(time))].index[0]
-            data_df.loc[row_index, 'Start-up annealer'] = value
+        if self.start_shut:
+            for key, value in start_dic.items():
+                row_index = data_df[(data_df['Generators'] == int(key[0])) & (data_df['Periods'] == int(key[1]))].index[0]
+                data_df.loc[row_index, 'Start variable classical'] = value
 
-        for key, value in shut_results.items():
-            key_parts = key.split('_')
-            _, generator, time = key_parts
-            row_index = data_df[(data_df['Generators'] == int(generator)) & (data_df['Periods'] == int(time))].index[0]
-            data_df.loc[row_index, 'Shut-down annealer'] = value
+            for key, value in shut_dic.items():
+                row_index = data_df[(data_df['Generators'] == int(key[0])) & (data_df['Periods'] == int(key[1]))].index[0]
+                data_df.loc[row_index, 'Shut variable classical'] = value
 
         return data_df
 
